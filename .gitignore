@@ -1,0 +1,12 @@
+*.env
+*.log
+*.txt
+*.pdf
+*.docx
+*.doc
+*.xls
+*.xlsx
+*.csv
+*.json
+*.yaml
+*.yml
