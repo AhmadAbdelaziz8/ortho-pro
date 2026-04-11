@@ -6,6 +6,8 @@ service DiagnosticService{
     rpc GetDiagnostic(scanPayload) returns (diagnosticReport);
 }
 
+option go_package = "ortho-pro/backend/pb";
+
 message scanPayload {
     // xray image in base64 format
     bytes image = 1;
