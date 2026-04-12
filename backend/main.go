@@ -1,119 +1,205 @@
 package main
 
 import (
-	"fmt"
 	"bytes"
-	"encoding/base64"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"os"
+
+	pb "your/module/path/pb"
+
+	"google.golang.org/genai"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
-
-
-// write a struct ( class ) for the server 
 type Server struct {
-	pb.UnimplementedDiagnosticServiceServer // this is a placeholder for the server 
+	pb.UnimplementedDiagnosticServiceServer
 }
 
-// implement the GetDiagnostic method that belongs to the Server struct
-func (s *Server) GetDiagnostic(ctx context.Context, req *pb.GetDiagnosticRequest) (*pb.GetDiagnosticResponse, error) {
-	// two variables we might get from the client:
-	var image bytes.Buffer
+type Finding struct {
+	Name     string `json:"name"`
+	Location string `json:"location"`
+	Severity string `json:"severity"`
+}
+
+type Classification struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Grade       string `json:"grade"`
+}
+
+type XrayDiagnosis struct {
+	BoneName       string         `json:"bone_name"`
+	Findings       []Finding      `json:"findings"`
+	Classification Classification `json:"classification"`
+	Diagnosis      string         `json:"diagnosis"`
+}
+
+func (s *Server) GetDiagnostic(stream pb.DiagnosticService_GetDiagnosticServer) error {
+	var imageBuffer bytes.Buffer
 	var clinicalHistory string
 
-	fmt.printLn("recieeved the x-ray chunks ")
-
-	// step 1: the streaming for loop
+	log.Println("received x-ray chunks")
 
 	for {
-		req , err := stream.Recv()
-
-		// break the loop if there no recieved data
+		req, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
-
-		// break the loop if an error is received
 		if err != nil {
-			return nil, status.Errorf(codes.Internal, "error while recieving the x-ray chunks: %v", err)
+			return status.Errorf(codes.Internal, "error while receiving x-ray chunks: %v", err)
 		}
 
-		// append the recieved chunk to the image
-		imageBuffer.Write(req.GetImage())
+		if _, err := imageBuffer.Write(req.GetImage()); err != nil {
+			return status.Errorf(codes.Internal, "error while buffering image bytes: %v", err)
+		}
 
-		//  append the clinical history if it's there 
 		if req.GetClinicalHistory() != "" {
 			clinicalHistory = req.GetClinicalHistory()
 		}
 
-		//  break the loop if the last chunk is received
 		if req.GetIsLastChunk() {
 			break
 		}
-
-		// build the image, encoded to base64 string 
-		iamgeBase64 := base64.StdEncoding.EncodeToString(imageBuffer.Bytes())
-
-		// send stream that we have recieved the image
-		stream.send(
-			&pb.GetDiagnosticResponse{
-				message: "image recieved",
-			}
-		)
 	}
+
+	if imageBuffer.Len() == 0 {
+		return status.Error(codes.InvalidArgument, "no image data received")
+	}
+
+	diagnosis, err := getImageDiagnosis(imageBuffer.Bytes(), clinicalHistory)
+	if err != nil {
+		return err
+	}
+
+	diagnosisJSON, err := json.MarshalIndent(diagnosis, "", "  ")
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to marshal diagnosis JSON: %v", err)
+	}
+
+	// This assumes your proto has a Message field.
+	// Better: add a dedicated field like diagnosis_json in your proto.
+	return stream.Send(&pb.GetDiagnosticResponse{
+		Message: string(diagnosisJSON),
+	})
 }
 
-// function to send the image to the vision model, and get the diagnosis 
-func sendImageToGemma(imageBase64 string) (string, error) {
-	openRouterApiKey := os.Getenv("OPENROUTER_API_KEY")
-	gemmaUrl := "https://openrouter.ai/api/v1/chat/completions"
-	model := "google/gemini-2.5-flash"
+func getImageDiagnosis(imageBytes []byte, clinicalHistory string) (*XrayDiagnosis, error) {
+	if os.Getenv("GEMINI_API_KEY") == "" {
+		return nil, status.Error(codes.Internal, "GEMINI_API_KEY is not set")
+	}
 
-	// payload, set stream to true 
-	payload := map[string]interface{} {
-		"model":model,
-		"stream":true,
-		"messages":[]map[string]interface{}{
-			{
-				"role":"user",
-				"content":[]map[string]interface{}{
-					{
-						"type":"image_url",
-						"image_url":map[string]interface{}{
-							"url":fmt.Sprintf("data:image/jpeg;base64,%s", imageBase64),
+	ctx := context.Background()
+	model := "gemini-3-flash-preview"
+
+	client, err := genai.NewClient(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "error while creating Gemini client: %v", err)
+	}
+
+	schema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"bone_name": map[string]any{
+				"type":        "string",
+				"description": "Main bone involved in the injury, for example tibia, fibula, radius, ulna, humerus, or femur.",
+			},
+			"findings": map[string]any{
+				"type":        "array",
+				"description": "Important imaging findings seen on the X-ray.",
+				"items": map[string]any{
+					"type":                 "object",
+					"additionalProperties": false,
+					"properties": map[string]any{
+						"name": map[string]any{
+							"type":        "string",
+							"description": "Name of the imaging finding, for example fracture, dislocation, lytic lesion, or joint effusion.",
+						},
+						"location": map[string]any{
+							"type":        "string",
+							"description": "Anatomical location of the finding.",
+						},
+						"severity": map[string]any{
+							"type":        "string",
+							"description": "Severity or extent if visible, for example mild, moderate, severe, displaced, or non-displaced.",
 						},
 					},
+					"required": []string{"name", "location", "severity"},
 				},
-				"system": "You are a radiologist. You are given an x-ray image with or without a clinical history. \n
-				You need to diagnose the patient based on the image and the clinical history. \n
-				provide location of the fracture if any, and the type of fracture if any. \n
-				provide the diagnosis in a json format with the following fields: \n
-				- diagnosis: the diagnosis of the patient \n
-				- location: the location of the fracture if any \n
-				- type: the type of fracture if any \n
-				- severity: the severity of the fracture if any \n
-				- treatment: the treatment plan for the patient \n
-				- prognosis: the prognosis for the patient \n
-				- recommendation: the recommendation for the patient \n
-				- note: any additional notes or comments \n
+			},
+			"classification": map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"description":          "Fracture or injury classification when applicable. Use empty strings if no classification applies.",
+				"properties": map[string]any{
+					"name": map[string]any{
+						"type":        "string",
+						"description": "Classification system name, for example Gartland, AO, or Salter-Harris.",
+					},
+					"description": map[string]any{
+						"type":        "string",
+						"description": "Short explanation of the classification result.",
+					},
+					"grade": map[string]any{
+						"type":        "string",
+						"description": "Classification grade or type, for example type II, 42-A1, or Salter-Harris II.",
+					},
+				},
+				"required": []string{"name", "description", "grade"},
+			},
+			"diagnosis": map[string]any{
+				"type":        "string",
+				"description": "Single concise radiology-style diagnosis or impression.",
 			},
 		},
-		"max_tokens":1000,
-		"temperature":0.7,
-		"top_p":1,	
-		"frequency_penalty":0,
-		"presence_penalty":0,
-		"n":1,
-		"stop":[]string{},
-		"stream_options":map[string]interface{}{
-			"include_usage":true,
-		},
+		"required": []string{"bone_name", "findings", "classification", "diagnosis"},
 	}
-	
+
+	config := &genai.GenerateContentConfig{
+		ResponseMIMEType:   "application/json",
+		ResponseJsonSchema: schema,
+	}
+
+	prompt := fmt.Sprintf(`
+You are assisting with structured extraction from an orthopaedic X-ray.
+
+Clinical history:
+%s
+
+Instructions:
+- Analyze the image and return only the JSON fields requested by the schema.
+- Be cautious and do not invent findings not visible on the image.
+- If no fracture classification applies, keep classification fields as empty strings.
+- Keep "diagnosis" short and clinically useful.
+`, clinicalHistory)
+
+	parts := []*genai.Part{
+		genai.NewPartFromBytes(imageBytes, "image/jpeg"), // change to image/png if needed
+		genai.NewPartFromText(prompt),
+	}
+
+	contents := []*genai.Content{
+		genai.NewContentFromParts(parts, genai.RoleUser),
+	}
+
+	result, err := client.Models.GenerateContent(ctx, model, contents, config)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Gemini request failed: %v", err)
+	}
+
+	var diagnosis XrayDiagnosis
+	if err := json.Unmarshal([]byte(result.Text()), &diagnosis); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse structured JSON: %v; raw=%s", err, result.Text())
+	}
+
+	return &diagnosis, nil
 }
 
 func main() {
-	// fmt.Println("Hello, World!")
-
-	// step 1: recieve the image from the client 
-
-
+	// Start your gRPC server here.
+	
 }
-

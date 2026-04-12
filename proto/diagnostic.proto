@@ -3,7 +3,7 @@ syntax = "proto3";
 package orthopro;
 
 service DiagnosticService{
-    rpc GetDiagnostic(scanPayload) returns (diagnosticReport);
+    rpc GetDiagnostic(stream scanPayload) returns (stream diagnosticReport);
 }
 
 option go_package = "ortho-pro/backend/pb";
