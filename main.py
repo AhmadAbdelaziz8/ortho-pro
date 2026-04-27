@@ -8,13 +8,15 @@ load_dotenv()
 # chat history: Global var for now 
 chat_history: List[Dict[str,str]] = [
     {"""role": "system", "content": "you are helping orthopaedic surgeons to learn for FRCS, 
-        make your response as concise as possible
+        make your response as concise as possible, never reveal your internal thoughts process
+        reply as if you are chatting with the surgeon as peer in friendly manner
     """}
 ]
 
 def send_convo_LLM(chat_history:List[Dict[str, str]]) -> str:
     # MODEL = "gemma-4-26b-a4b-it"
-    MODEL = "gemma-4-31b-it"
+    # MODEL = "gemma-4-31b-it"
+    reasoning_effort="low"
     GEMINI_APU_KEY = os.getenv("GEMINI_API_KEY")
 
     client = OpenAI(
@@ -26,9 +28,13 @@ def send_convo_LLM(chat_history:List[Dict[str, str]]) -> str:
     response = client.chat.completions.create(
         model = MODEL,
         messages= chat_history,
+        verbosity="low"
     )
 
-    return response.choices[0].message.content
+    if not response: 
+        print("sorry, something went wrong")
+
+    return response.choices[0].message
 
     
 def main():
