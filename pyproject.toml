@@ -6,5 +6,8 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "openai",
-    "dotenv"
+    "dotenv",
+    "tavily",
+    "pymupdf>=1.27.2.3",
+    "pathlib"
 ]

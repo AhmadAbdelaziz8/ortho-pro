@@ -1,1 +1,7 @@
 .env
+/books*
+/data
+/.venv
+uv.lock
+uv.lock
+.vscode/settings.json
