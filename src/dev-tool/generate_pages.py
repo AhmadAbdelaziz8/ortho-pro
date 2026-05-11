@@ -27,6 +27,7 @@ def generate_pages(mcrea_doc):
     DOC_PATH = Path("/Users/ahmad-ali/repos/ortho-pro/data/pages_data")
     # create a folder for that path if doesn't exist
     DOC_PATH.mkdir(parents=True, exist_ok= True)
+    CHUNK_SIZE = 120
 
     page_count = mcrea_doc.page_count
     for page_index in range(page_count):
@@ -48,7 +49,7 @@ def generate_pages(mcrea_doc):
             # start_index = word_index
             # end_index = words.length 
 
-            if chunk_words_count < 20: 
+            if chunk_words_count < CHUNK_SIZE: 
                 chunk_content += word + " "
                 chunk_words_count += 1    
             else: 
@@ -66,14 +67,9 @@ def generate_pages(mcrea_doc):
         file_path = DOC_PATH / f"page_{page_index + 1}.json"
         
         # open the doc and save the dict there,
-        with open(file_path, "w") as file:
-            # save the page as json
-            json.dump(
-                page_content,
-                file,
-            )
-
-        print(f"page {page_index + 1} has been saved successfully")
+        with open(file_path, "w", encoding="utf-8") as file:
+            json.dump(page_content, file, ensure_ascii=False, indent=2)
+            # print(f"page {page_index + 1} has been saved successfully")
 
 
 if __name__ == "__main__":
